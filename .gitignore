@@ -1,0 +1,13 @@
+build/
+sim_*
+*.vcd
+*.fsdb
+*.log
+.DS_Store
+__MACOSX/
+# Cadence run outputs
+*.rpt
+xcelium.d/
+INCA_libs/
+fv/
+*.gds
