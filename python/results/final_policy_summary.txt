@@ -1,0 +1,54 @@
+FINAL ADAPTIVE POLICY VALIDATION
+========================================================================
+
+Images: 100
+Isolation threshold: 90.0%
+
+ADAPTIVE POLICY
+------------------------------------------------------------------------
+conv1                          -> L0
+layer1.0.conv1                 -> L0
+layer1.0.conv2                 -> L0
+layer1.1.conv1                 -> L0
+layer1.1.conv2                 -> L0
+layer2.0.conv1                 -> L0
+layer2.0.conv2                 -> L0
+layer2.0.downsample.0          -> L2
+layer2.1.conv1                 -> L0
+layer2.1.conv2                 -> L0
+layer3.0.conv1                 -> L0
+layer3.0.conv2                 -> L0
+layer3.0.downsample.0          -> L3
+layer3.1.conv1                 -> L0
+layer3.1.conv2                 -> L0
+layer4.0.conv1                 -> L0
+layer4.0.conv2                 -> L0
+layer4.0.downsample.0          -> L1
+layer4.1.conv1                 -> L2
+layer4.1.conv2                 -> L1
+
+POLICY COUNTS
+------------------------------------------------------------------------
+L0: 15 layers
+L1: 2 layers
+L2: 2 layers
+L3: 1 layers
+
+PP cells removed: 47 / 1280
+PP-cell reduction: 3.67%
+
+NETWORK RESULTS
+------------------------------------------------------------------------
+  policy  reference_agreement_pct  n_differing_predictions  inference_time_s  pp_cells_dropped_per_multiplier  total_pp_cells_dropped  pp_cell_reduction_pct
+      L0                    100.0                        0         74.346361                              0.0                       0               0.000000
+      L1                     25.0                       75        229.385030                              3.0                      60               4.687500
+      L2                      1.0                       99        286.726844                             10.0                     200              15.625000
+      L3                      0.0                      100        248.001597                             21.0                     420              32.812500
+ADAPTIVE                     86.0                       14        117.548946                              NaN                      47               3.671875
+
+IMPORTANT LIMITATIONS
+------------------------------------------------------------------------
+1. This run uses 100 images and is therefore candidate-policy validation, not final statistical validation.
+2. Reference agreement measures agreement with the exact INT8 reference network.
+3. The CIFAR-10 accuracy remains diagnostic because the model uses an ImageNet 1000-class classifier.
+4. PP-cell reduction is a structural multiplier-level estimate, not synthesized chip area or energy savings.

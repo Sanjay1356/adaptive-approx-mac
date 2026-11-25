@@ -11,3 +11,13 @@ xcelium.d/
 INCA_libs/
 fv/
 *.gds
+
+# Python simulation: environments, datasets and large generated outputs
+.venv/
+venv/
+__pycache__/
+*.pyc
+python/data/
+python/results/old_vs_new_comparison.csv
+python/results/resnet_workload/*
+!python/results/resnet_workload/resnet18_workload_summary.csv

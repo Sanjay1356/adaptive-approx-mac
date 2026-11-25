@@ -16,7 +16,13 @@ B.Tech Final Year Project, Electronics Engineering (VLSI Design and Technology),
 
 DNN inference is mostly multiply–accumulate operations, so the MAC unit drives an accelerator's area and power. Approximate multipliers save hardware. But applying **one** approximation level to every layer ignores a basic fact: **layers do not tolerate error equally.** Some can be approximated heavily, while others break the network's prediction with even small errors.
 
-This project builds a **signed INT8 MAC whose approximation level is chosen per layer at run time**. The per-layer levels come from **measured** sensitivity on ResNet-18, not from a proxy.
+This project builds a **signed INT8 MAC whose approximation level is chosen per layer at run time**. The per-layer levels come from **measured** sensitivity on ResNet-18, not from a proxy. The whole chain lives in this repo:
+
+```
+Python golden model ──► DNN layer-isolation sweep ──► 90% policy ──► SystemVerilog RTL ──► Genus / LEC / Innovus ──► GDSII
+   python/models/          python/experiments/          policy LUT        rtl/  tb/             flow/
+        └──────────── 262,144 golden vectors (vectors/) tie the RTL to the Python model bit-for-bit ────────────┘
+```
 
 ```
  layer_id ──► ┌────────────────────────────┐  approx_level[1:0]  ┌──────────────────────────────────┐
@@ -50,7 +56,7 @@ For K ≤ 6 every removed cell has positive weight, so the sign handling of the 
 
 ## Deriving the per-layer policy
 
-1. Run the exact INT8 ResNet-18 (ImageNet-pretrained, 20 conv layers including 3 downsample 1×1s) on a fixed 100-image set to get reference predictions.
+1. Run the exact INT8 ResNet-18 (torchvision ImageNet-pretrained weights, 20 conv layers including 3 downsample 1×1s) on a fixed set of 100 CIFAR-10 test images, resized to 224×224, to get reference predictions. The approximate multiplier is applied inside every conv via a 65,536-entry LUT built from the golden model.
 2. For each layer ℓ and each level L1–L3, approximate **only that layer** and measure top-1 **prediction agreement** with the reference. That gives 60 measurements.
 3. Assign each layer the **strongest level with ≥ 90% agreement**, or L0 if none qualifies.
 
@@ -79,12 +85,13 @@ The downsample layers and the last two convolutions are the most tolerant. conv1
 | L3 uniform | 0% |
 | **Adaptive policy** | **86%** |
 
-Uniform approximation collapses quickly, even at the mildest level. The adaptive policy keeps most of the reference behaviour. Errors from the 5 approximated layers compound, so the network-level result falls below the 90% per-layer threshold. Agreement is measured against the exact INT8 model, not against ImageNet labels.
+Uniform approximation collapses quickly, even at the mildest level. The adaptive policy keeps most of the reference behaviour. Errors from the 5 approximated layers compound, so the network-level result falls below the 90% per-layer threshold. Agreement is measured against the exact INT8 model. It is not label accuracy, because the 1000-class ImageNet head is run on CIFAR-10 inputs.
 
 ### Verification
 
 | Unit | Method | Result |
 |---|---|---|
+| Python golden model | `tests/` + exhaustive bit-level vs. reference product | PASS |
 | `approx_multiplier` (runtime level) | Exhaustive, 256 × 256 × 4 levels vs. golden model | **262,144 / 262,144 pass** |
 | `approx_multiplier` (`FIXED_K` = 0/2/4/6) | Exhaustive vs. same golden vectors | **262,144 / 262,144 pass** |
 | `adaptive_policy_controller` | All IDs, invalid IDs, `layer_valid=0`, async reset | **71 / 71 pass** |
@@ -143,9 +150,17 @@ Flow: init (MMMC, slow lib for setup, fast lib for hold) → floorplan → power
 │   ├── tb_adaptive_policy_controller.sv
 │   └── tb_adaptive_mac_system.sv     # integration
 ├── vectors/golden_vectors.txt        # 262,144 golden vectors: "AA BB L PPPP" (hex)
-├── model/approx_mul.py               # readable Python reference; self-checks against the vectors
 ├── flow/                             # Genus, Conformal LEC and Innovus scripts
-└── Makefile
+├── Makefile
+└── python/                           # algorithm-level simulation (see below)
+    ├── config/config.py              # widths, overflow policy, seeds: single source of truth
+    ├── models/                       # golden multiplier, PP-truncation model, exact MAC
+    ├── experiments/                  # error characterization, DNN sweeps, policy validation, workload export
+    ├── tests/                        # model correctness tests
+    ├── tools/generate_golden_vectors.py
+    ├── results/                      # CSV/TXT outputs of the runs reported here
+    ├── plots/
+    └── run_all.py
 ```
 
 ### `approx_multiplier`: two uses of one module
@@ -165,16 +180,50 @@ make mac        # accumulator
 make policy     # policy controller (71 checks)
 make system     # integration
 
-python3 model/approx_mul.py   # Python reference vs. golden vectors
 ```
 
 Icarus prints `sorry: Case unique/unique0 qualities are ignored`. This is harmless. The original results were also run in Cadence Xcelium and inspected in SimVision.
 
 The scripts in `flow/` expect a Cadence install and a GPDK180 PDK. Library paths are read from `GPDK180_LIB` / `GPDK180_ROOT`, so set them for your server.
 
+## Python simulation (`python/`)
+
+This is where the arithmetic is defined and the policy is derived. Run every command from `python/`:
+
+```bash
+cd python
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+python run_all.py                                       # tests + exhaustive arithmetic + MAC-level error (no DNN, ~minutes)
+python -m tools.generate_golden_vectors                 # rebuild ../vectors/golden_vectors.txt (byte-identical)
+python -m experiments.layer_isolation_sensitivity      # 20 layers × L1–L3 isolation sweep (Table: per-layer agreement)
+python -m experiments.final_policy_validation          # derive 90% policy, compare vs. uniform L0–L3
+python -m experiments.export_resnet_int8_workload      # INT8 operand workload for power analysis (~5 GB, not committed)
+```
+
+| Module / script | What it does |
+|---|---|
+| `models/multiplier.py` | Exact signed INT8 reference and bit-level multiplier |
+| `models/pp_truncation.py` | **Golden model**: PP-column truncation, sign weights, gated compensation, `level_multiply()` |
+| `models/exact_mac.py`, `approximation.py` | MAC accumulation (32-bit wrap) and approximation wrappers |
+| `experiments/exhaustive_pp_characterization.py` | Error stats (MAE, bias, NMAE) over all 65,536 pairs per level |
+| `experiments/error_characterization.py`, `mac_level_test.py` | Error distributions and 64-term dot-product accumulation error |
+| `experiments/real_dnn_mac_profile.py`, `mac_level_decision_analysis.py` | MAC-level error on real ResNet-18 operands, per layer |
+| `experiments/dnn_accuracy_eval.py` | INT8 quantized ResNet-18 with approximate convs (LUT-based) |
+| `experiments/layer_isolation_sensitivity.py` | One-layer-at-a-time sensitivity sweep |
+| `experiments/final_policy_validation.py` | Policy derivation and whole-network validation |
+| `experiments/export_resnet_int8_workload.py` | Sampled per-layer operand stream for switching-activity power |
+| `experiments/compare_old_new.py` | Shows why an earlier operand-truncation model was dropped in favour of PP truncation |
+
+Notes:
+- The DNN scripts download CIFAR-10 to `python/data/` and the torchvision ResNet-18 weights on first run. `real_dnn_mac_profile.py` reads CIFAR-10 from `~/datasets`.
+- Large outputs are regenerated rather than committed: the CIFAR data, `results/resnet_workload/*.csv` (the 4 M-record workload, ~4.8 GB) and `results/old_vs_new_comparison.csv`. `resnet18_workload_summary.csv` is kept and lists per-layer MAC counts.
+- The policy in the RTL comes from the 90% threshold in `final_policy_validation.py`. The `layer_isolation_summary.txt` header shows a 99% threshold from an earlier setting, but the per-layer percentages are the same ones used.
+
 ## Limitations and future work
 
-- The network validation uses 100 images and reports agreement with the exact INT8 model. It is preliminary and is not a full ImageNet accuracy evaluation.
+- The network validation uses 100 CIFAR-10 images on an ImageNet-pretrained model and reports agreement with the exact INT8 model. It is preliminary, not a label-accuracy evaluation.
 - The policy is chosen from isolated-layer measurements, so interaction between approximated layers is not modelled (86% vs. the 90% per-layer target).
 - The policy is static and layer-indexed, not input-adaptive.
 - Power numbers are synthesis estimates. A ResNet-18 INT8 workload (4 M MAC records) has been generated for switching-activity power, energy/MAC and energy/inference, but that analysis is still pending.
